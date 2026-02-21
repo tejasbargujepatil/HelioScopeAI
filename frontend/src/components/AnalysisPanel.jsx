@@ -42,10 +42,10 @@ const PANEL_TYPES = [
 
 export default function AnalysisPanel({ coords, onAnalyze, loading, externalPanelArea }) {
     const [panelType, setPanelType] = useState('premium');
-    const [panelArea, setPanelArea] = useState(100);
+    const [panelArea, setPanelArea] = useState(80);
     const [efficiency, setEfficiency] = useState(0.20);
     const [electricityRate, setElectricityRate] = useState(8.0);
-    const [installationCost, setInstallationCost] = useState(0);  // 0 = auto
+    const [installationCost, setInstallationCost] = useState(80 * 8800); // auto from area × costPerM2
     const [costPerM2, setCostPerM2] = useState(8800);
     const [areaAutoSet, setAreaAutoSet] = useState(false);
     const [customEfficiency, setCustomEfficiency] = useState(20);

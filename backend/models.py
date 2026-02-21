@@ -93,7 +93,7 @@ class AnalyzeRequest(BaseModel):
     )
 
     # Legacy area-first (still supported)
-    panel_area: float = Field(default=80.0, gt=0, description="Panel area m²")
+    panel_area: float = Field(default=80.0, ge=0, description="Panel area m² (0 = use plant_size_kw only)")
     efficiency: float = Field(default=0.20, gt=0, le=1)
 
     electricity_rate: float  = Field(default=8.0,  description="₹/kWh")
@@ -101,7 +101,7 @@ class AnalyzeRequest(BaseModel):
 
     # Optional user hints for scoring
     grid_distance_km: Optional[float] = Field(default=None, ge=0, description="km to nearest grid")
-    available_area_m2: Optional[float] = Field(default=None, gt=0)
+    available_area_m2: Optional[float] = Field(default=None, ge=0)
 
 
 class AnalyzeResponse(BaseModel):
