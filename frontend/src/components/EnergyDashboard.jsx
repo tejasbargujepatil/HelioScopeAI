@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
-    AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip,
+    AreaChart, Area, BarChart, Bar, ComposedChart, Line,
+    XAxis, YAxis, Tooltip,
     ResponsiveContainer, CartesianGrid, ReferenceLine,
 } from 'recharts';
 import ProGate from './ProGate';
@@ -9,6 +10,7 @@ import api from '../services/apiService';
 
 const TABS = [
     { id: 'live', icon: '⚡', label: 'Live' },
+    { id: 'seasonal', icon: '🌞', label: 'Seasonal' },
     { id: 'forecast', icon: '🔮', label: 'Forecast' },
     { id: 'surplus', icon: '♻️', label: 'Surplus' },
     { id: 'carbon', icon: '🌿', label: 'Carbon' },
@@ -259,12 +261,70 @@ function BlockchainTab({ data, onUpgrade }) {
     );
 }
 
+// ── Seasonal Tab ───────────────────────────────────────────────────────────
+function SeasonalTab({ seasonal, loading }) {
+    if (loading) return <div style={{ textAlign: 'center', padding: 20, color: '#64748b' }}>Loading seasonal data...</div>;
+    if (!seasonal) return <div style={{ textAlign: 'center', padding: 20, color: '#475569' }}>No seasonal data yet. Run an analysis first.</div>;
+
+    const stab = (seasonal.stability_index * 100).toFixed(1);
+    const stabColor = stab >= 80 ? '#10b981' : stab >= 60 ? '#f59e0b' : '#ef4444';
+
+    return (
+        <div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 18 }}>
+                {[
+                    { label: '☀️ Peak', value: seasonal.peak_month, sub: `${seasonal.peak_irradiance} kWh/m²/d`, color: '#f59e0b' },
+                    { label: '🌧️ Low', value: seasonal.low_month, sub: `${seasonal.low_irradiance} kWh/m²/d`, color: '#64748b' },
+                    { label: '📊 Annual', value: `${fmt(Math.round(seasonal.annual_total_kwh))} kWh`, sub: 'total generation', color: '#6366f1' },
+                    { label: '🎯 Stability', value: `${stab}%`, sub: '1 − CoV index', color: stabColor },
+                ].map(m => (
+                    <div key={m.label} style={{
+                        background: 'rgba(255,255,255,0.03)', borderRadius: 10, padding: '10px 12px',
+                        border: '1px solid rgba(255,255,255,0.06)', textAlign: 'center',
+                    }}>
+                        <div style={{ fontSize: 10, color: '#475569', marginBottom: 4 }}>{m.label}</div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: m.color }}>{m.value}</div>
+                        <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>{m.sub}</div>
+                    </div>
+                ))}
+            </div>
+            <div style={{ fontSize: 12, color: '#64748b', marginBottom: 8 }}>
+                Monthly Solar Irradiance (kWh/m²/d) + Generation (kWh)
+            </div>
+            <ResponsiveContainer width="100%" height={220}>
+                <ComposedChart data={seasonal.monthly_summary}>
+                    <CartesianGrid stroke="rgba(255,255,255,0.04)" />
+                    <XAxis dataKey="month" tick={{ fill: '#475569', fontSize: 10 }} />
+                    <YAxis yAxisId="gen" tick={{ fill: '#475569', fontSize: 10 }} width={50} />
+                    <YAxis yAxisId="irr" orientation="right" tick={{ fill: '#f59e0b', fontSize: 10 }} width={40} domain={[0, 9]} unit=" kWh" />
+                    <Tooltip content={<DarkTooltip />} />
+                    <Bar yAxisId="gen" dataKey="generation_kwh" name="Generation kWh" fill="#6366f1" fillOpacity={0.7} radius={[3, 3, 0, 0]} />
+                    <Line yAxisId="irr" type="monotone" dataKey="irradiance_kwh_m2_day" name="Irradiance" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3, fill: '#f59e0b' }} />
+                </ComposedChart>
+            </ResponsiveContainer>
+            <div style={{
+                marginTop: 14, padding: '10px 14px',
+                background: stab >= 70 ? 'rgba(16,185,129,0.07)' : 'rgba(245,158,11,0.07)',
+                border: `1px solid ${stab >= 70 ? 'rgba(16,185,129,0.2)' : 'rgba(245,158,11,0.2)'}`,
+                borderRadius: 10, fontSize: 12, color: stabColor,
+            }}>
+                {stab >= 70
+                    ? `✅ High stability (${stab}%) — varies ±${seasonal.cov_pct}% across months. Ideal for consistent grid supply.`
+                    : `⚠️ Moderate variability (${stab}%) — ${seasonal.cov_pct}% CoV. Consider storage for monsoon months.`
+                }
+            </div>
+        </div>
+    );
+}
+
 // ── Main EnergyDashboard ───────────────────────────────────────────────────
 export default function EnergyDashboard({ analysisResult, onUpgrade }) {
     const { user, token } = useAuth();
     const [tab, setTab] = useState('live');
     const [data, setData] = useState(null);
+    const [seasonal, setSeasonal] = useState(null);
     const [loading, setLoading] = useState(false);
+    const [seasonalLoading, setSeasonalLoading] = useState(false);
     const [error, setError] = useState('');
 
     useEffect(() => {
@@ -282,6 +342,17 @@ export default function EnergyDashboard({ analysisResult, onUpgrade }) {
             .catch(e => setError(e?.response?.data?.error || 'Failed to load energy data.'))
             .finally(() => setLoading(false));
     }, [analysisResult, user?.tier]);
+
+    // Fetch seasonal data whenever analysis result changes
+    useEffect(() => {
+        if (!analysisResult?.lat || !analysisResult?.lng) return;
+        setSeasonalLoading(true);
+        const kw = analysisResult.plant_size_kw || 10;
+        api.get(`/api/seasonal?lat=${analysisResult.lat}&lng=${analysisResult.lng}&plant_size_kw=${kw}`)
+            .then(r => setSeasonal(r.data))
+            .catch(() => { })
+            .finally(() => setSeasonalLoading(false));
+    }, [analysisResult?.lat, analysisResult?.lng, analysisResult?.plant_size_kw]);
 
     return (
         <div className="card fade-in">
@@ -329,6 +400,7 @@ export default function EnergyDashboard({ analysisResult, onUpgrade }) {
                     ) : data ? (
                         <>
                             {tab === 'live' && <LiveTab data={data} />}
+                            {tab === 'seasonal' && <SeasonalTab seasonal={seasonal} loading={seasonalLoading} />}
                             {tab === 'forecast' && <ForecastTab data={data} />}
                             {tab === 'surplus' && <SurplusTab data={data} />}
                             {tab === 'carbon' && <CarbonTab data={data} />}

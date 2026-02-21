@@ -220,6 +220,7 @@ function AppInner() {
             selectedCoords={selectedCoords}
             score={placementData?.score}
             drawnArea={drawnArea}
+            plantSizeKw={plantSizeKw}
           />
           {/* Expand/Collapse toggle */}
           {pipelineResult && (

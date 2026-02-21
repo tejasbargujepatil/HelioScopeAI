@@ -536,6 +536,137 @@ async def switch_demo_tier(
 
 
 # ════════════════════════════════════════════════════════════════════════════════
+# HEATMAP / OPTIMAL SPOT ENDPOINT
+# ════════════════════════════════════════════════════════════════════════════════
+
+from models import HeatmapRequest, HeatmapResponse, SeasonalResponse, TariffSensitivityRequest, TariffSensitivityResponse
+from heatmap_service import compute_heatmap
+from seasonal_service import get_seasonal_analysis
+from roi import tariff_sensitivity
+
+@app.post("/api/heatmap", response_model=HeatmapResponse, tags=["Analysis"])
+@limiter.limit("10/minute")
+async def analyze_heatmap(request: Request, body: HeatmapRequest):
+    """
+    Grid-based heatmap analysis.
+    Divides polygon into resolution_m × resolution_m cells, scores each,
+    detects optimal sub-region, and computes spatial confidence.
+    """
+    if len(body.vertices) < 3:
+        raise HTTPException(status_code=400, detail="Polygon must have at least 3 vertices.")
+
+    # Fetch solar for polygon centroid (1 NASA call, interpolate to cells)
+    centroid_lat = sum(v[0] for v in body.vertices) / len(body.vertices)
+    centroid_lng = sum(v[1] for v in body.vertices) / len(body.vertices)
+
+    logger.info(f"[HEATMAP] centroid=({centroid_lat:.4f},{centroid_lng:.4f}) "
+                f"verts={len(body.vertices)} plant={body.plant_size_kw}kW res={body.resolution_m}m")
+
+    solar, weather, elev_data = await asyncio.gather(
+        fetch_solar_irradiance(centroid_lat, centroid_lng),
+        fetch_weather(centroid_lat, centroid_lng),
+        fetch_elevation_and_slope(centroid_lat, centroid_lng),
+    )
+
+    base_elevation = elev_data.get("elevation", 200.0)
+    base_slope     = elev_data.get("slope_degrees", 2.0)
+    base_score_result = calculate_score(
+        solar_irradiance=solar,
+        wind_speed=weather.get("wind_speed", 3.5),
+        elevation=base_elevation,
+        temperature=weather.get("temperature_c", 28.0),
+        humidity=weather.get("humidity_pct", 50.0),
+        lat=centroid_lat,
+        cloud_cover_pct=weather.get("cloud_cover_pct", 30.0),
+        slope_degrees=base_slope,
+        plant_size_kw=body.plant_size_kw,
+        data_sources=weather.get("data_sources", 3),
+    )
+    base_score = base_score_result.get("score", 70)
+
+    heatmap = compute_heatmap(
+        vertices=body.vertices,
+        base_solar=solar,
+        base_elevation=base_elevation,
+        base_slope=base_slope,
+        plant_size_kw=body.plant_size_kw,
+        base_score=base_score,
+        resolution_m=body.resolution_m,
+    )
+
+    return {
+        **heatmap,
+        "base_solar_irradiance": round(solar, 2),
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# SEASONAL TIME-SERIES ENDPOINT
+# ════════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/seasonal", response_model=SeasonalResponse, tags=["Analysis"])
+@limiter.limit("20/minute")
+async def analyze_seasonal(
+    request: Request,
+    lat: float,
+    lng: float,
+    plant_size_kw: float = 10.0,
+):
+    """
+    12-month solar irradiance and generation estimation.
+    Uses NASA POWER monthly climatology (long-term averages).
+    Returns stability index, monthly generation per kWp, peak/low months.
+    """
+    logger.info(f"[SEASONAL] lat={lat} lng={lng} plant={plant_size_kw}kW")
+    result = await get_seasonal_analysis(lat, lng, plant_size_kw)
+    if not result:
+        raise HTTPException(status_code=502, detail="Failed to fetch seasonal data.")
+    return result
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# TARIFF SENSITIVITY / NET METERING ENDPOINT
+# ════════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/roi/sensitivity", response_model=TariffSensitivityResponse, tags=["Analysis"])
+@limiter.limit("20/minute")
+async def analyze_tariff_sensitivity(request: Request, body: TariffSensitivityRequest):
+    """
+    ROI sensitivity across electricity tariff range.
+    Useful for tariff slider in frontend — shows payback vs tariff curve.
+    Includes net metering credit at each tariff point.
+    """
+    logger.info(f"[SENSITIVITY] lat={body.lat} lng={body.lng} plant={body.plant_size_kw}kW "
+                f"tariff={body.tariff_min}–{body.tariff_max} ₹/kWh")
+
+    solar = await fetch_solar_irradiance(body.lat, body.lng)
+
+    points = tariff_sensitivity(
+        solar_irradiance=solar,
+        plant_size_kw=body.plant_size_kw,
+        tariff_min=body.tariff_min,
+        tariff_max=body.tariff_max,
+        tariff_step=body.tariff_step,
+        daily_consumption_kwh=body.daily_consumption_kwh,
+    )
+
+    # Find optimal tariff (best effective savings) and break-even point
+    optimal_pt = max(points, key=lambda p: p["effective_savings"])
+    break_even = next(
+        (p["tariff_inr_per_kwh"] for p in points if p["payback_years"] < 10),
+        body.tariff_max
+    )
+
+    return {
+        "plant_size_kw":   body.plant_size_kw,
+        "solar_irradiance": round(solar, 2),
+        "data_points":     points,
+        "optimal_tariff":  optimal_pt["tariff_inr_per_kwh"],
+        "break_even_tariff": break_even,
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════════════
 # BILLING ROUTES (Razorpay)
 # ════════════════════════════════════════════════════════════════════════════════
 
