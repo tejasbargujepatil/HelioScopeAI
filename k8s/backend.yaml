@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: helioscope-backend
+  labels:
+    app: helioscope-backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: helioscope-backend
+  template:
+    metadata:
+      labels:
+        app: helioscope-backend
+    spec:
+      containers:
+        - name: backend
+          image: helioscope-backend:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: helioscope-secrets
+                  key: gemini-api-key
+            - name: JWT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: helioscope-secrets
+                  key: jwt-secret-key
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: helioscope-backend-svc
+spec:
+  selector:
+    app: helioscope-backend
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP
