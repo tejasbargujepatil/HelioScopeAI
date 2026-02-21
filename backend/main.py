@@ -489,6 +489,52 @@ async def get_me(
     }
 
 
+# ── Demo Tier Switcher (for judge/hackathon demos) ────────────────────────────
+class DemoTierBody(BaseModel):
+    tier: str      # "free" | "pro" | "enterprise"
+    demo_key: str  # simple shared secret, not full auth
+
+DEMO_SECRET = os.getenv("DEMO_SECRET_KEY", "helioscope-demo-2026")
+
+@app.post("/api/auth/demo-tier", tags=["Auth"])
+async def switch_demo_tier(
+    body: DemoTierBody,
+    user: Optional[User] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    🎪 DEMO MODE — instantly switch subscription tier for live demonstrations.
+    Requires demo_key (shared secret) + valid JWT.
+    """
+    if body.demo_key != DEMO_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid demo key.")
+    if user is None or db is None:
+        raise HTTPException(status_code=401, detail="Must be logged in to switch tier.")
+
+    valid_tiers = {"free": SubscriptionTier.free, "pro": SubscriptionTier.pro, "enterprise": SubscriptionTier.enterprise}
+    new_tier = valid_tiers.get(body.tier)
+    if not new_tier:
+        raise HTTPException(status_code=400, detail=f"Invalid tier '{body.tier}'. Use: free/pro/enterprise")
+
+    user.tier = new_tier
+    db.commit()
+    db.refresh(user)
+
+    # Issue fresh JWT with new tier claim
+    new_token = create_access_token(user.id, user.email, new_tier.value)
+    logger.info(f"[DEMO] {user.email} switched to tier={new_tier.value}")
+    return {
+        "message": f"✅ Switched to {new_tier.value} tier",
+        "access_token": new_token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id, "email": user.email,
+            "tier": new_tier.value, "full_name": user.full_name,
+            "analyses_used": 0, "analyses_limit": FREE_QUOTA if new_tier == SubscriptionTier.free else None,
+        }
+    }
+
+
 # ════════════════════════════════════════════════════════════════════════════════
 # BILLING ROUTES (Razorpay)
 # ════════════════════════════════════════════════════════════════════════════════

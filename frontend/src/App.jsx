@@ -8,12 +8,15 @@ import SummaryComponent from './components/SummaryComponent';
 import EnergyDashboard from './components/EnergyDashboard';
 import AuthModal from './components/AuthModal';
 import BillingModal from './components/BillingModal';
+import DemoTierSwitcher from './components/DemoTierSwitcher';
+import LandingPage from './components/LandingPage';
 import { analyzeFullPipeline } from './services/apiService';
 import './index.css';
 
 // ── Inner app (inside AuthProvider so useAuth() works) ───────────────────────
 function AppInner() {
-  const { user, token, logout } = useAuth();
+  const { user, token, logout, refreshUser } = useAuth();
+  const [showLanding, setShowLanding] = useState(true);
 
   const [selectedCoords, setSelectedCoords] = useState(null);
   const [pipelineResult, setPipelineResult] = useState(null);
@@ -38,14 +41,8 @@ function AppInner() {
 
   const handleAnalyze = useCallback(async ({ panelArea, efficiency, electricityRate, installationCost, plantSizeKw }) => {
     if (!selectedCoords) return;
-
-    // Require login
     if (!user) { setShowAuth(true); return; }
-
-    // Check free tier quota (warn via error, real enforcement is backend)
-    if (user.tier === 'free' && user.analyses_used >= 3) {
-      setShowBilling(true); return;
-    }
+    if (user.tier === 'free' && user.analyses_used >= 3) { setShowBilling(true); return; }
 
     setIsLoading(true); setPipelineResult(null); setError(null);
     setLoadingStage('🛰️  Fetching solar & wind + slope data (NASA + Open-Meteo)...');
@@ -57,12 +54,18 @@ function AppInner() {
     ];
     const timers = stages.map(([d, l]) => setTimeout(() => setLoadingStage(l), d));
 
+    // drawnArea  → available_area_m2 (physical rooftop space, not panel count)
+    // plantSizeKw → drives all ROI calculations
+    // panelArea  → only used if no plant_size_kw (legacy fallback)
+    const availableArea = drawnArea || null;
+
     try {
       const result = await analyzeFullPipeline({
         lat: selectedCoords.lat, lng: selectedCoords.lng,
         panelArea, efficiency, electricityRate,
         installationCost: installationCost || 0,
         plant_size_kw: plantSizeKw || 10,
+        available_area_m2: availableArea,
         token,
       });
       timers.forEach(clearTimeout);
@@ -87,7 +90,7 @@ function AppInner() {
       }
       setLoadingStage(''); setIsLoading(false);
     }
-  }, [selectedCoords, user, token]);
+  }, [selectedCoords, user, token, drawnArea]);
 
   const placementData = pipelineResult ? {
     // Core score
@@ -148,6 +151,11 @@ function AppInner() {
 
   const badge = user ? tierBadge(user.tier) : null;
 
+  // Show 3D landing page on first load
+  if (showLanding) {
+    return <LandingPage onEnter={() => setShowLanding(false)} />;
+  }
+
   return (
     <div className="app-layout">
       {/* Modals */}
@@ -182,6 +190,7 @@ function AppInner() {
                 background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)',
                 borderRadius: 7, color: '#f59e0b', fontSize: 12, fontWeight: 700, padding: '5px 12px', cursor: 'pointer',
               }}>Upgrade</button>
+              <DemoTierSwitcher />
               <button onClick={logout} style={{
                 background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
                 borderRadius: 7, color: '#64748b', fontSize: 12, padding: '5px 12px', cursor: 'pointer',

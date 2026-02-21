@@ -22,18 +22,20 @@ export const analyzeFullPipeline = async ({
     electricityRate = 8.0,
     installationCost = 0,
     plant_size_kw = 10,
+    available_area_m2 = null,
     token = null,
 }) => {
     const headers = token ? { Authorization: `Bearer ${token}` } : {};
-    const { data } = await api.post('/api/analyze', {
-        lat,
-        lng,
+    const body = {
+        lat, lng,
         panel_area: panelArea,
         efficiency,
         electricity_rate: electricityRate,
         installation_cost: installationCost,
         plant_size_kw,
-    }, { headers });
+    };
+    if (available_area_m2 != null) body.available_area_m2 = available_area_m2;
+    const { data } = await api.post('/api/analyze', body, { headers });
     return data;
 };
 
