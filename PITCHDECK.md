@@ -268,9 +268,9 @@ Deploy:   Docker + Kubernetes
 
 ---
 
-*Contact: [your email]*  
+*Contact: [tejasbarguje9@gmail.com]*  
 *GitHub: https://github.com/tejasbargujepatil/HelioScopeAI*  
-*Demo: http://localhost:5173*
+*Demo: http://helioscopeai.xyz*
 
 ---
 *© 2026 HelioScope AI — Confidential*
