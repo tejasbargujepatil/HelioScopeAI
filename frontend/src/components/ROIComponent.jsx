@@ -217,6 +217,39 @@ export default function ROIComponent({ roi, loading }) {
                 </div>
             </div>
 
+            {/* ── Net Metering ─────────────────────────────────────────────── */}
+            {roi.net_metering_annual_benefit_inr > 0 && (
+                <div style={{ marginTop: 14, padding: '12px 14px', background: 'rgba(16,185,129,0.04)', borderRadius: 10, border: '1px solid rgba(16,185,129,0.2)' }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#10b981', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        ⚡ Net Metering
+                        <span style={{ fontSize: 10, color: '#64748b', fontWeight: 400 }}>· 70% self-consumed · 30% exported at 50% tariff</span>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+                        {[
+                            { label: 'Self-Consumed', value: `${(roi.self_consumed_kwh || 0).toLocaleString('en-IN')} kWh`, color: '#10b981' },
+                            { label: 'Exported to Grid', value: `${(roi.exported_kwh || 0).toLocaleString('en-IN')} kWh`, color: '#3b82f6' },
+                            { label: 'Self-Saving', value: formatINR(roi.self_saving_inr || 0), color: '#10b981' },
+                            { label: 'Export Credit', value: formatINR(roi.export_credit_inr || 0), color: '#3b82f6' },
+                        ].map((m, i) => (
+                            <div key={i} style={{ padding: '8px 10px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.06)' }}>
+                                <div style={{ fontSize: 10, color: '#64748b' }}>{m.label}</div>
+                                <div style={{ fontSize: 14, fontWeight: 700, color: m.color }}>{m.value}</div>
+                            </div>
+                        ))}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                            <div style={{ fontSize: 10, color: '#64748b' }}>Annual Net Metering Benefit</div>
+                            <div style={{ fontSize: 18, fontWeight: 900, color: '#10b981' }}>{formatINR(roi.net_metering_annual_benefit_inr)}<span style={{ fontSize: 11, color: '#64748b' }}>/yr</span></div>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: 10, color: '#64748b' }}>Net Metering Payback</div>
+                            <div style={{ fontSize: 18, fontWeight: 900, color: '#f59e0b' }}>{roi.net_metering_payback_years} <span style={{ fontSize: 11, color: '#64748b' }}>yrs</span></div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* DCR mandate notice */}
             <div style={{
                 marginTop: 10,

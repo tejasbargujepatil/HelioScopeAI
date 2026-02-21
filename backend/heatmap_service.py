@@ -1,289 +1,247 @@
 """
-HelioScope AI — Heatmap Grid Service
-=====================================
-Divides a polygon into 100m×100m grid cells, scores each cell using the
-placement scoring engine, detects the optimal sub-region, and computes
-spatial confidence from inter-cell score variance.
+HelioScope AI — Micro-Grid Heatmap Service
+==========================================
+Divides a polygon into grid cells (default 100m × 100m), computes a
+placement score for each cell centroid, identifies optimal placement
+sub-regions, and returns grid-variance-based confidence calibration.
 
-Key functions:
-  generate_grid()       — produce lat/lng cell centres inside polygon
-  point_in_polygon()    — ray-casting test
-  compute_heatmap()     — score every cell, find optimal, compute variance
-  calculate_spatial_confidence() — stdev → confidence conversion
+Key design decisions:
+  • Solar irradiance is nearly constant within a small polygon (<5 km),
+    so we re-use the center irradiance for all cells.
+  • Elevation + slope varies per cell → batch-fetch for all centroids.
+  • Wind / cloud also constant at polygon scale → re-used from center.
+  • Each cell scored with full 8-factor engine (slope varies per cell).
 """
 
 import math
+import asyncio
 import logging
-from statistics import mean, stdev
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Dict, Optional
+
+from scoring import calculate_score
 
 logger = logging.getLogger(__name__)
 
-# Earth radius for metric conversions
-EARTH_RADIUS_M = 6_371_000.0
+# ── Constants ────────────────────────────────────────────────────────────────
+EARTH_RADIUS = 6371000          # metres
+DEFAULT_CELL_METRES = 100       # 100 m × 100 m grid cells
+MIN_CELLS = 4
+MAX_CELLS = 200                 # cap for performance
 
-# ── Coordinate helpers ────────────────────────────────────────────────────────
+# ── Geometry helpers ─────────────────────────────────────────────────────────
 
-def meters_to_deg_lat(meters: float) -> float:
-    """Convert metres to degrees of latitude (constant everywhere)."""
-    return meters / 111_320.0
-
-
-def meters_to_deg_lng(meters: float, lat_deg: float) -> float:
-    """Convert metres to degrees of longitude (varies with latitude)."""
-    return meters / (111_320.0 * math.cos(math.radians(lat_deg)))
+def _latlon_to_m(lat: float) -> Tuple[float, float]:
+    """Return metres-per-degree for (lat, lng) at given latitude."""
+    m_per_lat = EARTH_RADIUS * math.pi / 180
+    m_per_lng = EARTH_RADIUS * math.cos(math.radians(lat)) * math.pi / 180
+    return m_per_lat, m_per_lng
 
 
-def polygon_centroid(vertices: List[List[float]]) -> Tuple[float, float]:
-    """Compute centroid [lat, lng] of a polygon."""
+def _bbox(vertices: List[Tuple[float, float]]) -> Tuple[float, float, float, float]:
+    """Return (min_lat, min_lng, max_lat, max_lng) bounding box."""
     lats = [v[0] for v in vertices]
     lngs = [v[1] for v in vertices]
-    return sum(lats) / len(lats), sum(lngs) / len(lngs)
+    return min(lats), min(lngs), max(lats), max(lngs)
 
 
-def haversine_m(lat1, lng1, lat2, lng2) -> float:
-    """Distance in metres between two lat/lng points."""
-    R = EARTH_RADIUS_M
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlam = math.radians(lng2 - lng1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
-    return 2 * R * math.asin(math.sqrt(a))
-
-
-def polygon_area_m2(vertices: List[List[float]]) -> float:
-    """Spherical excess area estimation (same formula as frontend geodesicArea)."""
-    n = len(vertices)
-    if n < 3:
-        return 0.0
-    R = EARTH_RADIUS_M
-    total = 0.0
-    for i in range(n):
-        j = (i + 1) % n
-        lat1, lng1 = math.radians(vertices[i][0]), math.radians(vertices[i][1])
-        lat2, lng2 = math.radians(vertices[j][0]), math.radians(vertices[j][1])
-        total += (lng2 - lng1) * (2 + math.sin(lat1) + math.sin(lat2))
-    return abs(total * R * R / 2.0)
-
-
-# ── Point-in-polygon (ray casting) ───────────────────────────────────────────
-
-def point_in_polygon(lat: float, lng: float, vertices: List[List[float]]) -> bool:
-    """
-    Ray-casting algorithm to determine if (lat, lng) is inside the polygon.
-    Vertices: [[lat, lng], ...]
-    """
+def _point_in_polygon(lat: float, lng: float,
+                      vertices: List[Tuple[float, float]]) -> bool:
+    """Ray-casting point-in-polygon test."""
     n = len(vertices)
     inside = False
     j = n - 1
     for i in range(n):
         xi, yi = vertices[i][1], vertices[i][0]   # lng, lat
         xj, yj = vertices[j][1], vertices[j][0]
-        x, y = lng, lat
-        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
+        if ((yi > lat) != (yj > lat)) and (lng < (xj - xi) * (lat - yi) / (yj - yi + 1e-15) + xi):
             inside = not inside
         j = i
     return inside
 
 
-# ── Grid generation ───────────────────────────────────────────────────────────
-
-def generate_grid(
-    vertices: List[List[float]],
-    resolution_m: float = 100.0,
+def generate_grid_centroids(
+    vertices: List[Tuple[float, float]],
+    cell_metres: int = DEFAULT_CELL_METRES,
 ) -> List[Tuple[float, float]]:
     """
-    Generate a grid of (lat, lng) cell centres within the polygon.
-    Auto-scales resolution for very small polygons (rooftops).
-    Returns list of (lat, lng) tuples.
+    Generate a list of (lat, lng) cell centroids that fall inside the polygon.
+    Returns at most MAX_CELLS centroids.
     """
-    area = polygon_area_m2(vertices)
+    if len(vertices) < 3:
+        return []
 
-    # Auto-scale: for small areas use finer grid so we get ≥4 cells
-    if area > 0 and area < resolution_m ** 2 * 4:
-        resolution_m = max(10.0, math.sqrt(area) / 3.0)
-        logger.info(f"[Heatmap] Auto-scaled resolution to {resolution_m:.1f}m (area={area:.0f}m²)")
+    min_lat, min_lng, max_lat, max_lng = _bbox(vertices)
+    centre_lat = (min_lat + max_lat) / 2
 
-    lats = [v[0] for v in vertices]
-    lngs = [v[1] for v in vertices]
-    c_lat = sum(lats) / len(lats)
+    m_per_lat, m_per_lng = _latlon_to_m(centre_lat)
+    dlat = cell_metres / m_per_lat
+    dlng = cell_metres / m_per_lng
 
-    step_lat = meters_to_deg_lat(resolution_m)
-    step_lng = meters_to_deg_lng(resolution_m, c_lat)
+    # Compute adaptive cell size to stay within MAX_CELLS
+    area_deg2 = (max_lat - min_lat) * (max_lng - min_lng)
+    estimated = area_deg2 / (dlat * dlng)
+    if estimated > MAX_CELLS:
+        scale = math.sqrt(estimated / MAX_CELLS)
+        dlat *= scale
+        dlng *= scale
 
-    # Bounding box
-    min_lat, max_lat = min(lats) - step_lat, max(lats) + step_lat
-    min_lng, max_lng = min(lngs) - step_lng, max(lngs) + step_lng
-
-    points = []
-    lat = min_lat
+    centroids = []
+    lat = min_lat + dlat / 2
     while lat <= max_lat:
-        lng = min_lng
+        lng = min_lng + dlng / 2
         while lng <= max_lng:
-            if point_in_polygon(lat, lng, vertices):
-                points.append((lat, lng))
-            lng += step_lng
-        lat += step_lat
+            if _point_in_polygon(lat, lng, vertices):
+                centroids.append((round(lat, 7), round(lng, 7)))
+            lng += dlng
+        lat += dlat
 
-    # Always include centroid if no cells fell inside (tiny polygon)
-    if not points:
-        c_lng = sum(lngs) / len(lngs)
-        points.append((c_lat, c_lng))
+    if not centroids:
+        # Fallback: use polygon centroid as single cell
+        c_lat = sum(v[0] for v in vertices) / len(vertices)
+        c_lng = sum(v[1] for v in vertices) / len(vertices)
+        centroids = [(round(c_lat, 7), round(c_lng, 7))]
 
-    logger.info(f"[Heatmap] Grid: {len(points)} cells at {resolution_m:.0f}m resolution")
-    return points, resolution_m
+    return centroids[:MAX_CELLS]
 
 
-# ── Score interpolation for grid cells ────────────────────────────────────────
+# ── Slope interpolation for batch points ─────────────────────────────────────
 
-def estimate_cell_score(
-    lat: float, lng: float,
-    base_solar: float,
-    base_elevation: float,
-    base_slope: float,
+async def _fetch_slopes_batch(
+    centroids: List[Tuple[float, float]],
+) -> List[Tuple[float, float]]:
+    """
+    Fetch (elevation, slope) for each centroid using the elevation service.
+    Falls back to (0, 2.0) on error.
+    """
+    from elevation_service import fetch_elevation_and_slope
+
+    results = []
+    # Chunk into groups of 10 to avoid hammering the elevation API
+    chunk_size = 10
+    for i in range(0, len(centroids), chunk_size):
+        chunk = centroids[i:i + chunk_size]
+        tasks = [fetch_elevation_and_slope(lat, lng) for lat, lng in chunk]
+        batch = await asyncio.gather(*tasks, return_exceptions=True)
+        for res in batch:
+            if isinstance(res, Exception) or res is None:
+                results.append((100.0, 2.0))   # safe fallback
+            else:
+                results.append((res.get("elevation", 100.0), res.get("slope_degrees", 2.0)))
+    return results
+
+
+# ── Score colour ─────────────────────────────────────────────────────────────
+
+def _score_to_color(score: int) -> str:
+    """Map score 0-100 to a hex colour for heatmap rendering."""
+    if score >= 80: return "#10b981"   # green — Excellent
+    if score >= 65: return "#3b82f6"   # blue — Good
+    if score >= 50: return "#f59e0b"   # amber — Moderate
+    if score >= 35: return "#f97316"   # orange — Poor
+    return "#ef4444"                   # red — Unsuitable
+
+
+# ── Main heatmap function ─────────────────────────────────────────────────────
+
+async def compute_heatmap(
+    vertices: List[Tuple[float, float]],
     plant_size_kw: float,
-    base_score: int,
-    centroid_lat: float,
-    centroid_lng: float,
-) -> dict:
+    solar_irradiance: float,
+    wind_speed: float,
+    temperature: float,
+    humidity: float,
+    cloud_cover_pct: float,
+    grid_distance_km: Optional[float],
+    available_area_m2: Optional[float],
+    cell_metres: int = DEFAULT_CELL_METRES,
+) -> Dict:
     """
-    Fast cell scoring using base measurements + spatial variation.
-    
-    Real-world spatial variation sources:
-    - Solar: ±0.1 kWh/m²/d per 100m due to horizon shading & micro-climate
-    - Slope: varies with terrain undulation
-    - A small random-ish perturbation based on lat/lng hash for visual variety
+    Compute per-cell placement scores for a polygon.
+
+    Returns:
+        {
+            cells: [{lat, lng, score, grade, color, elevation, slope_degrees}],
+            optimal_cell: {lat, lng, score, ...},
+            top_cells: [...],           # top 3
+            cell_count: int,
+            cell_size_m: int,
+            score_variance: float,
+            score_mean: float,
+            confidence_calibrated: float,
+            suitability_distribution: {Excellent, Good, Moderate, Poor, Unsuitable}
+        }
     """
-    # Deterministic spatial perturbation using coordinate hash
-    seed = (lat * 1000 % 13.7) + (lng * 1000 % 7.3)
-    solar_delta = (math.sin(seed * 2.1) * 0.15)           # ±0.15 kWh/m²/d
-    slope_delta  = abs(math.cos(seed * 3.7) * 2.0)         # 0–2° extra slope
-    elev_delta   = math.sin(seed * 1.4) * 15.0             # ±15m elevation
+    centroids = generate_grid_centroids(vertices, cell_metres)
+    logger.info(f"[Heatmap] {len(centroids)} cells at {cell_metres}m grid")
 
-    cell_solar   = max(0.5, base_solar + solar_delta)
-    cell_slope   = max(0.0, base_slope + slope_delta)
-    cell_elev    = max(0.0, base_elevation + elev_delta)
+    # Batch fetch elevations & slopes
+    elev_slopes = await _fetch_slopes_batch(centroids)
 
-    # Import here to avoid circular — scoring is a flat module
-    from scoring import (
-        score_solar, score_slope, score_elevation,
-        WEIGHTS, clamp, gaussian, score_plant_size,
-    )
-
-    s_solar = score_solar(cell_solar)
-    s_slope = score_slope(cell_slope)
-    s_elev  = score_elevation(cell_elev)
-
-    # For temperature/wind/cloud/grid we use base values (no spatial variation assumed)
-    # Weighted partial score using only the geographically variable subset
-    partial = (
-        WEIGHTS["solar"]    * s_solar +
-        WEIGHTS["elevation"] * s_elev  +
-        WEIGHTS["slope"]    * s_slope
-    )
-    partial_weight = WEIGHTS["solar"] + WEIGHTS["elevation"] + WEIGHTS["slope"]
-
-    # Blend with base score for remaining 52% of weight
-    remaining_fraction = 1.0 - partial_weight
-    # base_score is 0-100, convert to 0-1
-    cell_score_01 = partial + remaining_fraction * (base_score / 100.0)
-    cell_score = int(clamp(cell_score_01 * 100, 0, 100))
-
-    # Suitability class
-    if cell_score >= 88:   suit = "Excellent"
-    elif cell_score >= 68: suit = "Good"
-    elif cell_score >= 47: suit = "Moderate"
-    elif cell_score >= 35: suit = "Poor"
-    else:                  suit = "Unsuitable"
-
-    return {
-        "lat":              round(lat, 6),
-        "lng":              round(lng, 6),
-        "score":            cell_score,
-        "suitability":      suit,
-        "solar_irradiance": round(cell_solar, 2),
-        "slope_degrees":    round(cell_slope, 1),
-    }
-
-
-# ── Spatial confidence ────────────────────────────────────────────────────────
-
-def calculate_spatial_confidence(cell_scores: List[int]) -> float:
-    """
-    Spatial confidence = how consistent is the polygon sub-region quality.
-    High variance → lower spatial confidence.
-    Formula: max(0, 100 - 2 × stdev)
-    """
-    if len(cell_scores) < 2:
-        return 100.0
-    sd = stdev(cell_scores)
-    return round(max(0.0, 100.0 - sd * 2.0), 1)
-
-
-# ── Main heatmap computation ──────────────────────────────────────────────────
-
-def compute_heatmap(
-    vertices: List[List[float]],
-    base_solar: float,
-    base_elevation: float,
-    base_slope: float,
-    plant_size_kw: float,
-    base_score: int,
-    resolution_m: float = 100.0,
-) -> dict:
-    """
-    Full heatmap computation:
-    1. Generate grid cells inside polygon
-    2. Score each cell
-    3. Find optimal cell
-    4. Compute spatial confidence
-
-    Returns dict with cells, optimal_cell, spatial_confidence, score_variance.
-    """
-    grid_points, actual_res = generate_grid(vertices, resolution_m)
-    centroid_lat, centroid_lng = polygon_centroid(vertices)
-
+    # Score each cell
     cells = []
-    for lat, lng in grid_points:
-        cell = estimate_cell_score(
-            lat, lng,
-            base_solar, base_elevation, base_slope,
-            plant_size_kw, base_score,
-            centroid_lat, centroid_lng,
+    for (lat, lng), (elevation, slope_deg) in zip(centroids, elev_slopes):
+        result = calculate_score(
+            solar_irradiance=solar_irradiance,
+            wind_speed=wind_speed,
+            elevation=elevation,
+            temperature=temperature,
+            humidity=humidity,
+            lat=lat,
+            cloud_cover_pct=cloud_cover_pct,
+            slope_degrees=slope_deg,
+            grid_distance_km=grid_distance_km,
+            plant_size_kw=plant_size_kw,
+            available_area_m2=available_area_m2,
+            data_sources=4,
+            apply_calibration=True,
+            run_constraints=False,    # don't fail cells individually
         )
-        cells.append(cell)
+        cells.append({
+            "lat": lat, "lng": lng,
+            "score": result["score"],
+            "grade": result["grade"],
+            "color": _score_to_color(result["score"]),
+            "elevation": round(elevation, 1),
+            "slope_degrees": round(slope_deg, 2),
+            "suitability_class": result["suitability_class"],
+        })
+
+    if not cells:
+        return {"cells": [], "cell_count": 0}
 
     # Sort by score descending
     cells.sort(key=lambda c: c["score"], reverse=True)
-
-    # Optimal cell = top scorer
-    optimal = None
-    if cells:
-        top = cells[0]
-        optimal = {
-            "lat":   top["lat"],
-            "lng":   top["lng"],
-            "score": top["score"],
-            "suitability": top["suitability"],
-            "reason": (
-                f"Highest scoring sub-region: {top['score']}/100 "
-                f"({top['suitability']}) — Solar {top['solar_irradiance']} kWh/m²/d, "
-                f"Slope {top['slope_degrees']}°"
-            ),
-        }
-
     scores = [c["score"] for c in cells]
-    spatial_conf = calculate_spatial_confidence(scores)
-    score_variance = round(stdev(scores), 1) if len(scores) >= 2 else 0.0
-    avg_score = round(mean(scores), 1) if scores else 0.0
+
+    mean_score  = sum(scores) / len(scores)
+    variance    = sum((s - mean_score) ** 2 for s in scores) / len(scores)
+    std_dev     = math.sqrt(variance)
+
+    # Grid-variance confidence calibration:
+    # Low variance = consistent quality = higher confidence
+    # High variance = heterogeneous terrain = lower confidence
+    max_variance = 625   # 25² (25 points std-dev = very heterogeneous)
+    agreement_factor = max(0.0, 1.0 - variance / max_variance)
+    confidence_calibrated = round(50 + 50 * agreement_factor, 1)
+
+    # Suitability distribution
+    dist = {"Excellent": 0, "Good": 0, "Moderate": 0, "Poor": 0, "Unsuitable": 0}
+    for c in cells:
+        key = c["suitability_class"]
+        dist[key] = dist.get(key, 0) + 1
+
+    optimal = cells[0]
+    top_cells = cells[:3]
 
     return {
-        "cells":               cells,
-        "optimal_cell":        optimal,
-        "spatial_confidence":  spatial_conf,
-        "score_variance":      score_variance,
-        "avg_cell_score":      avg_score,
-        "total_cells":         len(cells),
-        "resolution_m":        round(actual_res, 1),
-        "polygon_area_m2":     round(polygon_area_m2(vertices), 1),
+        "cells": cells,
+        "optimal_cell": optimal,
+        "top_cells": top_cells,
+        "cell_count": len(cells),
+        "cell_size_m": cell_metres,
+        "score_mean": round(mean_score, 1),
+        "score_variance": round(variance, 2),
+        "score_std_dev": round(std_dev, 2),
+        "confidence_calibrated": confidence_calibrated,
+        "suitability_distribution": dist,
     }

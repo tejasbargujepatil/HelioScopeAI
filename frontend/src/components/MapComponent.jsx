@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
     MapContainer, TileLayer, useMapEvents,
-    Polygon, Marker, Tooltip, Rectangle, useMap
+    Polygon, Marker, Tooltip, useMap, CircleMarker,
 } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001';
 
 // ── Geodesic area (Shoelace on sphere) ────────────────────────────────────
 function geodesicArea(latlngs) {
@@ -31,15 +29,6 @@ function formatArea(m2) {
     return `${Math.round(m2).toLocaleString()} m²`;
 }
 
-// ── Score → heatmap colour ────────────────────────────────────────────────
-const scoreToColor = (score) => {
-    if (score >= 88) return '#10b981'; // Excellent — emerald
-    if (score >= 68) return '#34d399'; // Good — light green
-    if (score >= 47) return '#f59e0b'; // Moderate — amber
-    if (score >= 35) return '#f97316'; // Poor — orange
-    return '#ef4444';                  // Unsuitable — red
-};
-
 // ── Grade → colour ────────────────────────────────────────────────────────
 const gradeColor = (score) => {
     if (!score) return '#6366f1';
@@ -48,97 +37,6 @@ const gradeColor = (score) => {
     if (score >= 50) return '#f59e0b';
     return '#ef4444';
 };
-
-// ── Optimal spot star icon ─────────────────────────────────────────────────
-const starIcon = L.divIcon({
-    className: '',
-    html: `<div style="
-        font-size:28px;line-height:1;
-        filter:drop-shadow(0 0 8px rgba(16,185,129,0.9)) drop-shadow(0 2px 4px rgba(0,0,0,0.6));
-        animation:pulse 1.5s ease-in-out infinite;
-    ">⭐</div>`,
-    iconSize: [32, 32],
-    iconAnchor: [16, 16],
-});
-
-// ── Heatmap overlay component ───────────────────────────────────────────────
-function HeatmapOverlay({ cells, optimalCell, resolutionM, onOptimalSelect }) {
-    if (!cells || cells.length === 0) return null;
-    const halfDeg = (resolutionM || 100) / 111320 / 2;
-    const halfDegLng = (resolutionM || 100) / 111320 / 2; // approx
-
-    return (
-        <>
-            {cells.map((cell, i) => {
-                const bounds = [
-                    [cell.lat - halfDeg, cell.lng - halfDegLng],
-                    [cell.lat + halfDeg, cell.lng + halfDegLng],
-                ];
-                const color = scoreToColor(cell.score);
-                return (
-                    <Rectangle
-                        key={i}
-                        bounds={bounds}
-                        pathOptions={{
-                            color: color,
-                            fillColor: color,
-                            fillOpacity: 0.45,
-                            weight: 0.5,
-                            opacity: 0.6,
-                        }}
-                    >
-                        <Tooltip sticky>
-                            <div style={{ fontSize: 12, minWidth: 140 }}>
-                                <strong style={{ color }}>{cell.suitability}</strong> — {cell.score}/100<br />
-                                ☀️ {cell.solar_irradiance} kWh/m²/d · ⛰️ {cell.slope_degrees}° slope
-                            </div>
-                        </Tooltip>
-                    </Rectangle>
-                );
-            })}
-            {optimalCell && (
-                <Marker
-                    position={[optimalCell.lat, optimalCell.lng]}
-                    icon={starIcon}
-                    eventHandlers={{ click: () => onOptimalSelect?.({ lat: optimalCell.lat, lng: optimalCell.lng }) }}
-                >
-                    <Tooltip permanent direction="top" offset={[0, -12]} className="optimal-tip">
-                        <div style={{ fontSize: 11, color: '#10b981', fontWeight: 700 }}>
-                            ⭐ Optimal Spot — {optimalCell.score}/100
-                        </div>
-                    </Tooltip>
-                </Marker>
-            )}
-        </>
-    );
-}
-
-// ── Heatmap legend ──────────────────────────────────────────────────────────
-function HeatmapLegend() {
-    return (
-        <div style={{
-            position: 'absolute', bottom: 30, left: 10, zIndex: 800,
-            background: 'rgba(15,23,42,0.92)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            borderRadius: 10, padding: '10px 14px',
-            fontSize: 11, color: '#94a3b8',
-        }}>
-            <div style={{ fontWeight: 700, marginBottom: 6, color: '#f1f5f9' }}>🌡️ Suitability</div>
-            {[
-                { c: '#10b981', l: 'Excellent (88+)' },
-                { c: '#34d399', l: 'Good (68–87)' },
-                { c: '#f59e0b', l: 'Moderate (47–67)' },
-                { c: '#f97316', l: 'Poor (35–46)' },
-                { c: '#ef4444', l: 'Unsuitable (<35)' },
-            ].map(({ c, l }) => (
-                <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-                    <div style={{ width: 12, height: 12, borderRadius: 2, background: c, flexShrink: 0 }} />
-                    <span>{l}</span>
-                </div>
-            ))}
-        </div>
-    );
-}
 
 // ── Tile layers ───────────────────────────────────────────────────────────
 const TILES = {
@@ -439,13 +337,12 @@ function PointPicker({ enabled, onPick }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-export default function MapComponent({ onLocationSelect, onAreaDrawn, selectedCoords, score, drawnArea, plantSizeKw }) {
+export default function MapComponent({ onLocationSelect, onAreaDrawn, selectedCoords, score, drawnArea, heatmapData }) {
     const [tileKey, setTileKey] = useState('dark');
     const [drawing, setDrawing] = useState(false);
     const [vertices, setVertices] = useState([]);
     const [polygon, setPolygon] = useState(null);
-    const [heatmapData, setHeatmapData] = useState(null);
-    const [heatmapLoading, setHeatmapLoading] = useState(false);
+    const [showHeatmap, setShowHeatmap] = useState(true);
 
     // Silent GPS on mount
     useEffect(() => {
@@ -459,7 +356,7 @@ export default function MapComponent({ onLocationSelect, onAreaDrawn, selectedCo
 
     const addVertex = useCallback((v) => setVertices(p => [...p, v]), []);
 
-    const closePolygon = useCallback(async () => {
+    const closePolygon = useCallback(() => {
         if (vertices.length < 3) return;
         const area = geodesicArea(vertices);
         const centroid = vertices.reduce(
@@ -468,35 +365,13 @@ export default function MapComponent({ onLocationSelect, onAreaDrawn, selectedCo
         );
         setPolygon({ vertices, area });
         setDrawing(false);
-        onAreaDrawn?.(Math.round(area));
+        onAreaDrawn?.({ area: Math.round(area), vertices: vertices.map(v => [v[0], v[1]]), centroid });
         onLocationSelect(centroid);
+    }, [vertices, onAreaDrawn, onLocationSelect]);
 
-        // Auto-trigger heatmap analysis on polygon close
-        setHeatmapLoading(true);
-        try {
-            const res = await fetch(`${API_BASE}/api/heatmap`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    vertices: vertices,
-                    plant_size_kw: plantSizeKw || 10,
-                    resolution_m: 100,
-                }),
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setHeatmapData(data);
-            }
-        } catch (e) {
-            console.warn('Heatmap fetch failed:', e);
-        } finally {
-            setHeatmapLoading(false);
-        }
-    }, [vertices, onAreaDrawn, onLocationSelect, plantSizeKw]);
-
-    const startDraw = () => { setDrawing(true); setVertices([]); setPolygon(null); setHeatmapData(null); onAreaDrawn?.(null); };
+    const startDraw = () => { setDrawing(true); setVertices([]); setPolygon(null); onAreaDrawn?.(null); };
     const cancelDraw = () => { setDrawing(false); setVertices([]); };
-    const clearPolygon = () => { setPolygon(null); setVertices([]); setHeatmapData(null); onAreaDrawn?.(null); };
+    const clearPolygon = () => { setPolygon(null); setVertices([]); onAreaDrawn?.(null); };
 
     const tile = TILES[tileKey];
     const pinIcon = selectedCoords ? makePinIcon(score || null) : null;
@@ -546,74 +421,40 @@ export default function MapComponent({ onLocationSelect, onAreaDrawn, selectedCo
                 {polygon && (
                     <Polygon
                         positions={polygon.vertices}
-                        pathOptions={{ color: '#10b981', fillColor: '#10b981', fillOpacity: 0.10, weight: 2 }}
+                        pathOptions={{ color: '#10b981', fillColor: '#10b981', fillOpacity: 0.15, weight: 2 }}
                     >
                         <Tooltip sticky={false} permanent direction="center" opacity={0.95}>
                             <span style={{ fontSize: 12, fontWeight: 700 }}>📐 {formatArea(polygon.area)}</span>
                         </Tooltip>
                     </Polygon>
                 )}
+                {/* ── Heatmap overlay ──────────────────────────────────────── */}
+                {heatmapData && showHeatmap && heatmapData.cells?.map((cell, i) => (
+                    <CircleMarker
+                        key={i}
+                        center={[cell.lat, cell.lng]}
+                        radius={cell === heatmapData.optimal_cell ? 10 : 7}
+                        pathOptions={{
+                            color: cell === heatmapData.optimal_cell ? '#fbbf24' : cell.color,
+                            fillColor: cell.color,
+                            fillOpacity: 0.65,
+                            weight: cell === heatmapData.optimal_cell ? 2.5 : 1,
+                        }}
+                    >
+                        <Tooltip sticky>
+                            <div style={{ fontSize: 12, lineHeight: 1.5 }}>
+                                <strong>{cell.score}/100 {cell.grade}</strong> — {cell.suitability_class}<br />
+                                Slope: {cell.slope_degrees}° · Elev: {cell.elevation}m<br />
+                                {cell === heatmapData.optimal_cell && <span style={{ color: '#f59e0b' }}>⭐ Optimal Placement Zone</span>}
+                            </div>
+                        </Tooltip>
+                    </CircleMarker>
+                ))}
+
                 {polygon && selectedCoords && pinIcon && (
                     <Marker position={[selectedCoords.lat, selectedCoords.lng]} icon={pinIcon} />
                 )}
-
-                {/* Heatmap overlay — rendered after polygon analysis */}
-                {heatmapData && (
-                    <HeatmapOverlay
-                        cells={heatmapData.cells}
-                        optimalCell={heatmapData.optimal_cell}
-                        resolutionM={heatmapData.resolution_m}
-                        onOptimalSelect={onLocationSelect}
-                    />
-                )}
             </MapContainer>
-
-            {/* Heatmap legend */}
-            {heatmapData && <HeatmapLegend />}
-
-            {/* Heatmap loading indicator */}
-            {heatmapLoading && (
-                <div style={{
-                    position: 'absolute', top: '50%', left: '50%',
-                    transform: 'translate(-50%,-50%)',
-                    zIndex: 900,
-                    background: 'rgba(15,23,42,0.9)',
-                    border: '1px solid rgba(16,185,129,0.4)',
-                    borderRadius: 12, padding: '12px 20px',
-                    color: '#10b981', fontSize: 13, fontWeight: 700,
-                    display: 'flex', alignItems: 'center', gap: 10,
-                }}>
-                    <div style={{
-                        width: 16, height: 16, border: '2px solid #10b981',
-                        borderTopColor: 'transparent', borderRadius: '50%',
-                        animation: 'spin 0.8s linear infinite',
-                    }} />
-                    Generating Heatmap...
-                </div>
-            )}
-
-            {/* Heatmap spatial confidence badge */}
-            {heatmapData && (
-                <div style={{
-                    position: 'absolute', top: 60, right: 10, zIndex: 900,
-                    background: 'rgba(15,23,42,0.9)',
-                    border: '1px solid rgba(16,185,129,0.3)',
-                    borderRadius: 10, padding: '8px 12px',
-                    fontSize: 11, color: '#94a3b8',
-                }}>
-                    <div style={{ color: '#f1f5f9', fontWeight: 700, marginBottom: 4 }}>🗺️ Heatmap</div>
-                    <div>{heatmapData.total_cells} cells · {heatmapData.resolution_m}m</div>
-                    <div style={{ color: '#10b981', fontWeight: 700 }}>
-                        Spatial Conf: {heatmapData.spatial_confidence}%
-                    </div>
-                    <div>Variance: ±{heatmapData.score_variance}</div>
-                    {heatmapData.optimal_cell && (
-                        <div style={{ color: '#f59e0b', marginTop: 4 }}>
-                            ⭐ Best: {heatmapData.optimal_cell.score}/100
-                        </div>
-                    )}
-                </div>
-            )}
 
             {/* ── Bottom toolbar ──────────────────────────────────────────── */}
             <div style={{
@@ -648,6 +489,15 @@ export default function MapComponent({ onLocationSelect, onAreaDrawn, selectedCo
                         <div className="map-hint" style={{ color: '#10b981', borderColor: 'rgba(16,185,129,0.35)' }}>
                             📐 <strong>{formatArea(polygon.area)}</strong> &nbsp;·&nbsp; auto-set as panel area
                         </div>
+                        {heatmapData && (
+                            <MapBtn
+                                color={showHeatmap ? '#10b981' : '#64748b'}
+                                border={showHeatmap ? 'rgba(16,185,129,0.4)' : 'rgba(255,255,255,0.1)'}
+                                onClick={() => setShowHeatmap(h => !h)}
+                            >
+                                {showHeatmap ? '🌡️ Hide Heatmap' : '🌡️ Show Heatmap'}
+                            </MapBtn>
+                        )}
                         <MapBtn color="#f59e0b" border="rgba(245,158,11,0.35)" onClick={startDraw}>✏️ Redraw</MapBtn>
                         <MapBtn color="rgba(255,255,255,0.5)" border="rgba(255,255,255,0.1)" onClick={clearPolygon}>✕ Clear</MapBtn>
                     </>

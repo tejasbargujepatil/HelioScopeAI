@@ -301,7 +301,7 @@ export default function LandingPage({ onEnter }) {
     const features = [
         { icon: '🛰️', title: 'Real NASA Data', desc: 'Live satellite solar irradiance from NASA POWER API — 365-day verified actuals, not static maps.', gradient: 'linear-gradient(135deg,#1e3a5f,#0f2040)', delay: '0.1s' },
         { icon: '🧮', title: '8-Factor Algorithm', desc: 'Gaussian-sigmoid scoring for solar, slope, wind, cloud cover, grid proximity, and more.', gradient: 'linear-gradient(135deg,#1a3020,#0d2010)', delay: '0.2s' },
-        { icon: '🤖', title: 'Gemini AI Reports', desc: 'Human-readable site intelligence powered by Google Gemini 2.0 Flash — not just a number.', gradient: 'linear-gradient(135deg,#2d1b69,#1a0f40)', delay: '0.3s' },
+        { icon: '🤖', title: 'AI Reports', desc: 'Human-readable site intelligence powered by Google Gemini 2.0 Flash — not just a number.', gradient: 'linear-gradient(135deg,#2d1b69,#1a0f40)', delay: '0.3s' },
         { icon: '📐', title: 'Terrain Slope', desc: '5-point stencil slope estimation — know if your terrain is IEC-compliant before spending a rupee.', gradient: 'linear-gradient(135deg,#3b1a1a,#1a0d0d)', delay: '0.4s' },
         { icon: '🏭', title: 'Plant-Size Planning', desc: 'Capacity-first ROI: pick 10/20/30/50kW and get land area, cost, and payback instantly.', gradient: 'linear-gradient(135deg,#1a2d1a,#0d1a0d)', delay: '0.5s' },
         { icon: '🇮🇳', title: 'PM Surya Ghar', desc: 'MNRE 2026 subsidy calculator built-in — ₹78,000 CFA included in every financial projection.', gradient: 'linear-gradient(135deg,#2d2040,#1a1230)', delay: '0.6s' },

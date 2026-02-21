@@ -6,6 +6,7 @@ import ResultsPanel from './components/ResultsPanel';
 import ROIComponent from './components/ROIComponent';
 import SummaryComponent from './components/SummaryComponent';
 import EnergyDashboard from './components/EnergyDashboard';
+import SeasonalChart from './components/SeasonalChart';
 import AuthModal from './components/AuthModal';
 import BillingModal from './components/BillingModal';
 import DemoTierSwitcher from './components/DemoTierSwitcher';
@@ -24,6 +25,8 @@ function AppInner() {
   const [loadingStage, setLoadingStage] = useState('');
   const [error, setError] = useState(null);
   const [drawnArea, setDrawnArea] = useState(null);
+  const [drawnVertices, setDrawnVertices] = useState(null);  // polygon [[lat,lng]...]
+  const [heatmapData, setHeatmapData] = useState(null);
   const [showAuth, setShowAuth] = useState(false);
   const [showBilling, setShowBilling] = useState(false);
   const [dashboardExpanded, setDashboardExpanded] = useState(false);
@@ -35,8 +38,10 @@ function AppInner() {
     setDashboardExpanded(false);
   }, []);
 
-  const handleAreaDrawn = useCallback((areaM2) => {
-    setDrawnArea(areaM2);
+  const handleAreaDrawn = useCallback(({ area, vertices, centroid }) => {
+    setDrawnArea(area);
+    setDrawnVertices(vertices || null);
+    if (centroid) setSelectedCoords(centroid);
   }, []);
 
   const handleAnalyze = useCallback(async ({ panelArea, efficiency, electricityRate, installationCost, plantSizeKw }) => {
@@ -77,6 +82,31 @@ function AppInner() {
         electricity_rate: electricityRate,
       });
       setDashboardExpanded(true);  // ← auto-expand on results
+
+      // ── Auto-trigger heatmap if polygon was drawn ──────────────────────
+      if (drawnVertices && drawnVertices.length >= 3 && result) {
+        const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+        fetch(`${API_BASE}/api/heatmap`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...headers },
+          body: JSON.stringify({
+            vertices: drawnVertices,
+            plant_size_kw: plantSizeKw || 10,
+            solar_irradiance: result.solar_irradiance || 5.5,
+            wind_speed: result.wind_speed || 3.5,
+            temperature: result.temperature_c || 25,
+            humidity: result.humidity_pct || 50,
+            cloud_cover_pct: result.cloud_cover_pct || 30,
+            grid_distance_km: null,
+            available_area_m2: drawnArea || null,
+            cell_metres: 100,
+          }),
+        })
+          .then(r => r.json())
+          .then(d => { if (d.cells) setHeatmapData(d); })
+          .catch(() => { });  // non-blocking — heatmap is bonus feature
+      }
     } catch (err) {
       timers.forEach(clearTimeout);
       const detail = err.response?.data?.error || err.message || 'Analysis failed.';
@@ -137,6 +167,14 @@ function AppInner() {
     net_cost_after_subsidy_inr: pipelineResult.net_cost_after_subsidy_inr,
     payback_years_after_subsidy: pipelineResult.payback_years_after_subsidy,
     lifetime_profit_after_subsidy_inr: pipelineResult.lifetime_profit_after_subsidy_inr,
+    // Net metering
+    self_consumed_kwh: pipelineResult.self_consumed_kwh,
+    exported_kwh: pipelineResult.exported_kwh,
+    self_saving_inr: pipelineResult.self_saving_inr,
+    export_credit_inr: pipelineResult.export_credit_inr,
+    net_metering_annual_benefit_inr: pipelineResult.net_metering_annual_benefit_inr,
+    net_metering_payback_years: pipelineResult.net_metering_payback_years,
+    electricity_rate: pipelineResult.electricity_rate,
   } : null;
 
   const summaryData = pipelineResult ? {
@@ -220,7 +258,7 @@ function AppInner() {
             selectedCoords={selectedCoords}
             score={placementData?.score}
             drawnArea={drawnArea}
-            plantSizeKw={plantSizeKw}
+            heatmapData={heatmapData}
           />
           {/* Expand/Collapse toggle */}
           {pipelineResult && (
@@ -333,10 +371,20 @@ function AppInner() {
             {/* Panel 3 — ROI + Subsidy */}
             <ROIComponent roi={roiData} loading={isLoading} />
 
-            {/* Panel 4 — AI Summary */}
+            {/* Panel 4 — Seasonal Time-Series */}
+            {selectedCoords && pipelineResult && (
+              <SeasonalChart
+                lat={selectedCoords.lat}
+                lng={selectedCoords.lng}
+                plantSizeKw={pipelineResult.plant_size_kw || 10}
+                token={token}
+              />
+            )}
+
+            {/* Panel 5 — AI Summary */}
             <SummaryComponent summary={summaryData} loading={isLoading} />
 
-            {/* Panel 5 — Smart Energy Dashboard (Pro+) */}
+            {/* Panel 6 — Smart Energy Dashboard (Pro+) */}
             {(pipelineResult || user) && (
               <EnergyDashboard
                 analysisResult={pipelineResult}

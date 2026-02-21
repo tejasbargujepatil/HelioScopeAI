@@ -283,15 +283,11 @@ def check_constraints(
         )
 
     required_m2 = plant_size_kw * 8.0
-    if available_area_m2 > 0 and required_m2 > 0:
-        usage_pct = (required_m2 / available_area_m2) * 100.0
-        if available_area_m2 < required_m2:
-            violations.append(
-                f"Insufficient area: {plant_size_kw:.0f}kW plant needs "
-                f"~{required_m2:.0f}m² but only {available_area_m2:.0f}m² is available "
-                f"({usage_pct:.0f}% utilisation — exceeds 100%). "
-                f"Reduce plant size to ≤{available_area_m2/8.0:.1f}kW or select a larger area."
-            )
+    if available_area_m2 > 0 and available_area_m2 < required_m2 * 0.4:
+        violations.append(
+            f"Available area {available_area_m2:.0f}m² is insufficient for "
+            f"{plant_size_kw:.0f}kW plant (requires ~{required_m2:.0f}m²)."
+        )
 
     return violations
 
