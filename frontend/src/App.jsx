@@ -124,6 +124,7 @@ function AppInner() {
             grid_distance_km: null,
             available_area_m2: drawnArea || null,
             cell_metres: 100,
+            base_elevation: result.elevation || 200,  // reuse from main analysis
           }),
         })
           .then(r => r.json())

@@ -732,6 +732,7 @@ class HeatmapRequest(BaseModel):
     grid_distance_km:  Optional[float] = None
     available_area_m2: Optional[float] = None
     cell_metres:       int   = 100
+    base_elevation:    float = 200.0   # reuse elevation from main analysis
 
 
 @app.post("/api/heatmap", tags=["Analysis"])
@@ -762,6 +763,7 @@ async def heatmap_analysis(
         grid_distance_km=body.grid_distance_km,
         available_area_m2=body.available_area_m2,
         cell_metres=body.cell_metres,
+        base_elevation=body.base_elevation,
     )
     logger.info(f"[Heatmap] {result['cell_count']} cells, mean={result['score_mean']}, "
                 f"conf_calibrated={result['confidence_calibrated']}%")
