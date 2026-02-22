@@ -71,6 +71,248 @@ HelioScope AI is a production-grade solar energy site selection platform that co
           (analyses stored for EMA calibration)
 ```
 
+```mermaid
+flowchart TB
+
+%% =========================
+%% USER LAYER
+%% =========================
+
+User[User]
+
+%% =========================
+%% FRONTEND LAYER
+%% =========================
+
+subgraph Frontend["Frontend Layer (React + Leaflet + Mapbox)"]
+
+MapComponent[Map Component\nPolygon Selection]
+AnalysisPanel[Analysis Panel\nPlant Capacity + Config]
+ResultsPanel[Results Panel\nScore + Heatmap]
+ROIComponent[ROI Dashboard]
+SummaryComponent[AI Summary Panel]
+
+APIService[API Service Layer]
+
+MapComponent --> APIService
+AnalysisPanel --> APIService
+ResultsPanel --> APIService
+ROIComponent --> APIService
+SummaryComponent --> APIService
+
+end
+
+User --> MapComponent
+
+%% =========================
+%% API GATEWAY LAYER
+%% =========================
+
+subgraph APIGateway["API Gateway Layer"]
+
+FastAPI[FastAPI Gateway\nAuth + Routing + Validation]
+
+end
+
+APIService --> FastAPI
+
+%% =========================
+%% BACKEND MICROSERVICES
+%% =========================
+
+subgraph Backend["Backend Microservices Layer"]
+
+PlacementController[Placement Controller]
+ROIController[ROI Controller]
+SummaryController[Summary Controller]
+AuthController[Auth Controller]
+
+FastAPI --> PlacementController
+FastAPI --> ROIController
+FastAPI --> SummaryController
+FastAPI --> AuthController
+
+end
+
+%% =========================
+%% CORE ALGORITHM ENGINE
+%% =========================
+
+subgraph AlgorithmEngine["Hybrid Renewable Placement Optimization Engine (HRPOE)"]
+
+GridEngine[Grid Division Engine\nPolygon → Grid Cells]
+
+SolarService[Solar Irradiance Service]
+WindService[Wind Speed Service]
+ElevationService[Elevation Service]
+WeatherService[Temperature + Cloud Service]
+GridProximityService[Grid Infrastructure Service]
+
+GaussianNormalizer[Gaussian Normalization Engine]
+SigmoidNormalizer[Sigmoid Normalization Engine]
+
+WeightedScoring[Weighted Multi-Factor Scoring Engine]
+
+FeasibilityEngine[Plant Capacity Feasibility Engine]
+
+ROIEngine[ROI Calculation Engine]
+
+ConfidenceEngine[Confidence Score Engine]
+
+HeatmapEngine[Heatmap Generator]
+
+BestLocationEngine[Optimal Placement Selector]
+
+end
+
+PlacementController --> GridEngine
+
+GridEngine --> SolarService
+GridEngine --> WindService
+GridEngine --> ElevationService
+GridEngine --> WeatherService
+GridEngine --> GridProximityService
+
+SolarService --> GaussianNormalizer
+WindService --> GaussianNormalizer
+ElevationService --> GaussianNormalizer
+
+WeatherService --> SigmoidNormalizer
+GridProximityService --> SigmoidNormalizer
+
+GaussianNormalizer --> WeightedScoring
+SigmoidNormalizer --> WeightedScoring
+
+WeightedScoring --> FeasibilityEngine
+
+FeasibilityEngine --> ROIEngine
+
+ROIEngine --> ConfidenceEngine
+
+ConfidenceEngine --> HeatmapEngine
+
+HeatmapEngine --> BestLocationEngine
+
+BestLocationEngine --> PlacementController
+
+ROIController --> ROIEngine
+
+%% =========================
+%% LLM SERVICE
+%% =========================
+
+subgraph LLMService["AI Explanation Service"]
+
+LLMEngine[LLM Service\nGemini / OpenAI]
+
+end
+
+SummaryController --> LLMEngine
+
+%% =========================
+%% DATABASE
+%% =========================
+
+subgraph Database["Database Layer"]
+
+PostgreSQL[(PostgreSQL\nUser Data\nAnalysis Data\nCache)]
+
+end
+
+PlacementController --> PostgreSQL
+ROIController --> PostgreSQL
+SummaryController --> PostgreSQL
+AuthController --> PostgreSQL
+
+%% =========================
+%% EXTERNAL APIs
+%% =========================
+
+subgraph ExternalAPIs["External Data Providers"]
+
+NASA[NASA POWER API\nSolar Irradiance]
+OpenMeteo[Open-Meteo API\nWeather Data]
+ElevationAPI[Open Elevation API]
+OSM[OpenStreetMap API\nGrid Infrastructure]
+
+end
+
+SolarService --> NASA
+WindService --> OpenMeteo
+WeatherService --> OpenMeteo
+ElevationService --> ElevationAPI
+GridProximityService --> OSM
+
+%% =========================
+%% CONTAINERIZATION
+%% =========================
+
+subgraph DockerLayer["Docker Container Layer"]
+
+FrontendContainer[React Container]
+BackendContainer[FastAPI Container]
+AlgorithmContainer[Algorithm Engine Container]
+DBContainer[PostgreSQL Container]
+
+end
+
+FrontendContainer --> BackendContainer
+BackendContainer --> AlgorithmContainer
+BackendContainer --> DBContainer
+
+%% =========================
+%% KUBERNETES ORCHESTRATION
+%% =========================
+
+subgraph Kubernetes["Kubernetes Cluster"]
+
+Ingress[Ingress Controller]
+
+FrontendPod[Frontend Pod]
+BackendPod[Backend Pod]
+AlgorithmPod[Algorithm Pod]
+DBPod[Database Pod]
+
+ServiceMesh[Service Networking]
+
+end
+
+Ingress --> FrontendPod
+FrontendPod --> BackendPod
+BackendPod --> AlgorithmPod
+BackendPod --> DBPod
+
+%% =========================
+%% SECURITY LAYER
+%% =========================
+
+subgraph Security["Security Layer"]
+
+JWT[JWT Authentication]
+RateLimit[Rate Limiting]
+APISecurity[API Validation]
+Secrets[Secrets Management]
+
+end
+
+AuthController --> JWT
+FastAPI --> RateLimit
+FastAPI --> APISecurity
+BackendPod --> Secrets
+
+%% =========================
+%% FINAL OUTPUT FLOW
+%% =========================
+
+PlacementController --> ResultsPanel
+ROIController --> ROIComponent
+SummaryController --> SummaryComponent
+
+ResultsPanel --> User
+ROIComponent --> User
+SummaryComponent --> User
+```
+
 ---
 
 ## ⚡ Scoring Algorithm — 8 Factors
