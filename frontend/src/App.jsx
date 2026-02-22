@@ -27,6 +27,8 @@ function AppInner() {
   const [drawnArea, setDrawnArea] = useState(null);
   const [drawnVertices, setDrawnVertices] = useState(null);  // polygon [[lat,lng]...]
   const [heatmapData, setHeatmapData] = useState(null);
+  const [nationwideData, setNationwideData] = useState(null);
+  const [nationwideLoading, setNationwideLoading] = useState(false);
   const [showAuth, setShowAuth] = useState(false);
   const [showBilling, setShowBilling] = useState(false);
   const [dashboardExpanded, setDashboardExpanded] = useState(false);
@@ -44,6 +46,23 @@ function AppInner() {
     if (centroid) setSelectedCoords(centroid);
   }, []);
 
+  // ── Nationwide heatmap fetch ─────────────────────────────────────────────
+  const fetchNationwideHeatmap = useCallback(async (plantKw = 10) => {
+    if (nationwideData) { setNationwideData(null); return; } // toggle off
+    setNationwideLoading(true);
+    try {
+      const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const r = await fetch(`${API_BASE}/api/heatmap/nationwide?plant_size_kw=${plantKw}`, { headers });
+      const d = await r.json();
+      if (d.cells) {
+        setNationwideData(d);
+        setHeatmapData(null); // clear polygon heatmap when showing national
+      }
+    } catch (e) { console.warn('Nationwide heatmap error:', e); }
+    finally { setNationwideLoading(false); }
+  }, [nationwideData, token]);
+
   const handleAnalyze = useCallback(async ({ panelArea, efficiency, electricityRate, installationCost, plantSizeKw }) => {
     if (!selectedCoords) return;
     if (!user) { setShowAuth(true); return; }
@@ -60,15 +79,19 @@ function AppInner() {
     const timers = stages.map(([d, l]) => setTimeout(() => setLoadingStage(l), d));
 
     // drawnArea  → available_area_m2 (physical rooftop space, not panel count)
-    // plantSizeKw → drives all ROI calculations
-    // panelArea  → only used if no plant_size_kw (legacy fallback)
+    // plantSizeKw → drives all ROI calculations  (always use MNRE benchmark cost)
+    // installationCost from UI is panel-area-based — IGNORE when plant_size_kw is set
     const availableArea = drawnArea || null;
+    // When capacity-first (plantSizeKw > 0), let backend auto-compute cost
+    // from plant_size_kw × ₹50,000/kW (MNRE 2026 benchmark).
+    // User's costPerM2 * drawnArea is wildly wrong for large polygons.
+    const safeInstallCost = (plantSizeKw && plantSizeKw > 0) ? 0 : (installationCost || 0);
 
     try {
       const result = await analyzeFullPipeline({
         lat: selectedCoords.lat, lng: selectedCoords.lng,
         panelArea, efficiency, electricityRate,
-        installationCost: installationCost || 0,
+        installationCost: safeInstallCost,
         plant_size_kw: plantSizeKw || 10,
         available_area_m2: availableArea,
         token,
@@ -259,6 +282,9 @@ function AppInner() {
             score={placementData?.score}
             drawnArea={drawnArea}
             heatmapData={heatmapData}
+            nationwideHeatmapData={nationwideData}
+            onNationwideToggle={fetchNationwideHeatmap}
+            nationwideLoading={nationwideLoading}
           />
           {/* Expand/Collapse toggle */}
           {pipelineResult && (

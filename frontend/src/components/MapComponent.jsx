@@ -337,7 +337,7 @@ function PointPicker({ enabled, onPick }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-export default function MapComponent({ onLocationSelect, onAreaDrawn, selectedCoords, score, drawnArea, heatmapData }) {
+export default function MapComponent({ onLocationSelect, onAreaDrawn, selectedCoords, score, drawnArea, heatmapData, nationwideHeatmapData, onNationwideToggle, nationwideLoading }) {
     const [tileKey, setTileKey] = useState('dark');
     const [drawing, setDrawing] = useState(false);
     const [vertices, setVertices] = useState([]);
@@ -428,7 +428,30 @@ export default function MapComponent({ onLocationSelect, onAreaDrawn, selectedCo
                         </Tooltip>
                     </Polygon>
                 )}
-                {/* ── Heatmap overlay ──────────────────────────────────────── */}
+                {/* ── Nationwide heatmap overlay ──────────────────────────── */}
+                {nationwideHeatmapData?.cells?.map((cell, i) => (
+                    <CircleMarker
+                        key={`nat-${i}`}
+                        center={[cell.lat, cell.lng]}
+                        radius={6}
+                        pathOptions={{
+                            color: cell.color,
+                            fillColor: cell.color,
+                            fillOpacity: 0.55,
+                            weight: 0.8,
+                        }}
+                    >
+                        <Tooltip sticky>
+                            <div style={{ fontSize: 12, lineHeight: 1.5 }}>
+                                <strong>{cell.score}/100 {cell.grade}</strong> — {cell.suitability_class}<br />
+                                ☀️ {cell.solar_irradiance} kWh/m²/d<br />
+                                📍 {cell.lat.toFixed(2)}°N {cell.lng.toFixed(2)}°E
+                            </div>
+                        </Tooltip>
+                    </CircleMarker>
+                ))}
+
+                {/* ── Polygon heatmap overlay ─────────────────────────────── */}
                 {heatmapData && showHeatmap && heatmapData.cells?.map((cell, i) => (
                     <CircleMarker
                         key={i}
@@ -466,6 +489,13 @@ export default function MapComponent({ onLocationSelect, onAreaDrawn, selectedCo
                         <div className="map-hint">🗺️ Click to <span>select a location</span></div>
                         <MapBtn color="#f59e0b" border="rgba(245,158,11,0.35)" onClick={startDraw}>
                             ✏️ Draw Area
+                        </MapBtn>
+                        <MapBtn
+                            color={nationwideHeatmapData ? '#10b981' : '#6366f1'}
+                            border={nationwideHeatmapData ? 'rgba(16,185,129,0.45)' : 'rgba(99,102,241,0.45)'}
+                            onClick={() => onNationwideToggle?.()}
+                        >
+                            {nationwideLoading ? '⏳ Loading…' : nationwideHeatmapData ? '🇮🇳 Hide India Map' : '🇮🇳 India Heatmap'}
                         </MapBtn>
                     </>
                 )}

@@ -46,6 +46,7 @@ from user_db import User, BillingRecord, SubscriptionTier
 import energy_dashboard as ed
 from heatmap_service import compute_heatmap
 from seasonal_service import fetch_monthly_irradiance
+from nationwide_heatmap import compute_nationwide_heatmap
 from roi import calculate_tariff_sensitivity
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List, Tuple
@@ -820,3 +821,22 @@ async def tariff_sensitivity(
         installation_cost=body.installation_cost,
     )
     return {"sensitivity": table, "plant_size_kw": body.plant_size_kw}
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# NATIONWIDE INDIA HEATMAP
+# ════════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/heatmap/nationwide", tags=["Analysis"])
+async def nationwide_heatmap(
+    plant_size_kw: float = 10.0,
+    user: Optional[User] = Depends(get_current_user),
+):
+    """
+    🏭🗳️ Nationwide India Solar Heatmap
+    Pre-computed 0.75°-resolution grid across all of India (~1300 cells).
+    Uses estimated climate data — no external API calls — cached after first run.
+    Returns cells with scores, top regions, and optimal national location.
+    """
+    result = await compute_nationwide_heatmap(plant_size_kw=plant_size_kw)
+    return result
