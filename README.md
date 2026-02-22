@@ -70,6 +70,7 @@ HelioScope AI is a production-grade solar energy site selection platform that co
                   PostgreSQL DB
           (analyses stored for EMA calibration)
 ```
+## 🏗️ Architecture of System
 
 ```mermaid
 flowchart TB
